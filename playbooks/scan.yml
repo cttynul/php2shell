@@ -1,8 +1,6 @@
----
 # playbooks/scan.yml
 # Non-invasive farm-wide scan for CVE-2026-109618 / CVE-2026-109619 ("php2shell").
-# Native Ansible modules only. Reads local PHP version via `php -v` — no network
-# payloads, no exploitation, no drama.
+# Native Ansible modules only. Reads local PHP version via `php -v` no network payloads, no exploitation, no drama.
 
 - name: Scan server farm for php2shell (CVE-2026-109618/109619) exposure
   hosts: all
