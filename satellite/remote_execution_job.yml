@@ -1,0 +1,8 @@
+# satellite/remote_execution_job.yml
+# Registered as a Satellite Job Template (Ansible provider).
+# Thin wrapper so Satellite's Remote Execution recognizes and runs the same core playbook used by the other two methods CSV aggregation included, since it's part of the core playbook now.
+
+- name: php2shell Version Scan (Satellite Remote Execution)
+  hosts: "{{ satellite_target_hosts | default('all') }}"
+  gather_facts: false
+  import_playbook: ../playbooks/php2shell.yml
