@@ -1,0 +1,48 @@
+# aap/bootstrap_project.yml
+# Provisions the Project, Inventory, and Job Template in AAP via API.
+# Requires: ansible-galaxy collection install ansible.controller
+
+- name: Bootstrap php2shell scan in AAP
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - job_template_vars.yml
+
+  tasks:
+    - name: Create or update Project
+      ansible.controller.project:
+        name: "php2shell-scan"
+        organization: "{{ aap_organization }}"
+        scm_type: git
+        scm_url: "{{ scm_repo_url }}"
+        scm_branch: "{{ scm_branch | default('main') }}"
+        controller_host: "{{ aap_host }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: "{{ aap_validate_certs | default(true) }}"
+        state: present
+
+    - name: Create or update Inventory
+      ansible.controller.inventory:
+        name: "php2shell-farm"
+        organization: "{{ aap_organization }}"
+        controller_host: "{{ aap_host }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        state: present
+
+    - name: Create or update Job Template
+      ansible.controller.job_template:
+        name: "php2shell Version Scan"
+        job_type: run
+        inventory: "php2shell-farm"
+        project: "php2shell-scan"
+        playbook: "playbooks/scan.yml"
+        credentials:
+          - "{{ aap_machine_credential }}"
+        ask_variables_on_launch: false
+        verbosity: 1
+        controller_host: "{{ aap_host }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        state: present
