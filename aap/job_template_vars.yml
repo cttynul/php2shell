@@ -1,0 +1,9 @@
+# aap/job_template_vars.yml
+# Don't commit this with plaintext secrets. Ansible Vault it, or source the sensitive values from your secrets manager at run time.
+aap_host: "https://aap-controller.intranet.local"
+aap_username: "admin"
+aap_password: "{{ vault_aap_password }}"
+aap_organization: "Default"
+aap_machine_credential: "Server Farm SSH Key"
+scm_repo_url: "https://git.intranet.local/sec/php2shell.git"
+scm_branch: "main"
