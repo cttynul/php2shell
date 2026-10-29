@@ -1,0 +1,150 @@
+---
+# playbooks/scan.yml
+# Non-invasive farm-wide scan for CVE-2026-109618 / CVE-2026-109619 ("php2shell").
+# Native Ansible modules only. Reads local PHP version via `php -v` — no network
+# payloads, no exploitation, no drama.
+
+- name: Scan server farm for php2shell (CVE-2026-109618/109619) exposure
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    patched_versions:
+      "8.2": 35
+      "8.3": 36
+      "8.4": 27
+      "8.5": 12
+    affected_cves: "CVE-2026-109618, CVE-2026-109619"
+    php_binary_candidates:
+      - php
+      - php-fpm
+      - php7.4
+      - php-fpm7.4
+      - php8.0
+      - php-fpm8.0
+      - php8.1
+      - php-fpm8.1
+      - php8.2
+      - php-fpm8.2
+      - php8.3
+      - php-fpm8.3
+      - php8.4
+      - php-fpm8.4
+      - php8.5
+      - php-fpm8.5
+
+  tasks:
+    - name: Check which PHP binaries exist on the system
+      ansible.builtin.command: "which {{ item }}"
+      register: which_results
+      changed_when: false
+      failed_when: false
+      loop: "{{ php_binary_candidates }}"
+
+    - name: Build list of found binaries
+      ansible.builtin.set_fact:
+        found_binaries: "{{ which_results.results | selectattr('rc', 'equalto', 0) | map(attribute='stdout') | list }}"
+
+    - name: Report if no PHP found
+      ansible.builtin.debug:
+        msg: "No PHP binaries found on this host."
+      when: found_binaries | length == 0
+
+    - name: Get version string from each found binary
+      ansible.builtin.command: "{{ item }} -v"
+      register: php_versions_raw
+      changed_when: false
+      failed_when: false
+      loop: "{{ found_binaries }}"
+      when: found_binaries | length > 0
+
+    - name: Build structured version info per binary
+      ansible.builtin.set_fact:
+        php_findings: "{{ php_findings | default([]) + [entry] }}"
+      vars:
+        version_match: "{{ item.stdout_lines[0] | regex_search('PHP (\\d+)\\.(\\d+)\\.(\\d+)', '\\1', '\\2', '\\3') if item.stdout_lines | default([]) | length > 0 else [] }}"
+        branch: "{{ version_match[0] + '.' + version_match[1] if version_match | length == 3 else '' }}"
+        patch_num: "{{ version_match[2] | int if version_match | length == 3 else -1 }}"
+        patched_patch: "{{ patched_versions[branch] | default(-1) }}"
+        status: >-
+          {%- if version_match | length != 3 -%}
+          VERSION NOT DETECTED
+          {%- elif branch not in patched_versions -%}
+          UNKNOWN OR EOL
+          {%- elif patch_num | int >= patched_patch | int -%}
+          NOT VULNERABLE
+          {%- else -%}
+          VULNERABLE
+          {%- endif -%}
+        entry:
+          binary: "{{ item.item }}"
+          version: "{{ version_match | join('.') if version_match | length == 3 else 'n/a' }}"
+          status: "{{ status }}"
+          detail: >-
+            {%- if status == 'VULNERABLE' -%}
+            Installed {{ branch }}.{{ patch_num }}, fix is {{ branch }}.{{ patched_patch }} ({{ affected_cves }})
+            {%- elif status == 'NOT VULNERABLE' -%}
+            Installed {{ branch }}.{{ patch_num }}, >= fix {{ branch }}.{{ patched_patch }}
+            {%- elif status == 'UNKNOWN OR EOL' -%}
+            Branch {{ branch }} not mapped: verify manually
+            {%- else -%}
+            Could not parse -v output
+            {%- endif -%}
+      loop: "{{ php_versions_raw.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: found_binaries | length > 0
+
+    - name: Show findings for this host
+      ansible.builtin.debug:
+        var: php_findings
+      when: found_binaries | length > 0
+
+    - name: Save per-host JSON report on controller
+      ansible.builtin.copy:
+        content: "{{ php_findings | default([]) | to_nice_json }}"
+        dest: "./reports/{{ inventory_hostname }}_php2shell.json"
+      delegate_to: localhost
+
+    - name: Flag host as vulnerable
+      ansible.builtin.set_fact:
+        host_is_vulnerable: "{{ php_findings | default([]) | selectattr('status', 'equalto', 'VULNERABLE') | list | length > 0 }}"
+
+- name: Print global summary
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Collect vulnerable hosts
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} is VULNERABLE to php2shell"
+      when: hostvars[inventory_hostname].host_is_vulnerable | default(false)
+
+- name: Aggregate all per-host reports into a single CSV
+  hosts: localhost
+  gather_facts: false
+  vars:
+    reports_dir: "./reports"
+    csv_output: "./reports/php2shell_summary.csv"
+
+  tasks:
+    - name: Build combined findings list from all JSON reports
+      ansible.builtin.set_fact:
+        all_findings: >-
+          {{ all_findings | default([]) +
+             (lookup('file', item) | from_json |
+              map('combine', {'host': (item | basename | regex_replace('_php2shell\\.json$', ''))}) |
+              list) }}
+      loop: "{{ lookup('ansible.builtin.fileglob', reports_dir + '/*_php2shell.json', wantlist=True) }}"
+
+    - name: Write combined CSV report
+      ansible.builtin.copy:
+        dest: "{{ csv_output }}"
+        content: |
+          host,binary,version,status,detail
+          {% for f in all_findings | default([]) %}
+          "{{ f.host }}","{{ f.binary }}","{{ f.version }}","{{ f.status }}","{{ f.detail | replace('"', '""') }}"
+          {% endfor %}
+
+    - name: Announce CSV location
+      ansible.builtin.debug:
+        msg: "Combined CSV written to {{ csv_output }}"
